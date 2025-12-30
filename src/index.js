@@ -2,6 +2,7 @@ require("dotenv").config();
 const express = require("express");
 const cors = require("cors");
 const askGroq = require("./groq");
+const chatsRoutes = require("./routes/chats"); // ✅ ADDED
 
 const app = express();
 
@@ -10,11 +11,13 @@ const app = express();
 // ========================================
 
 // CORS - Allow React Native to connect
-app.use(cors({
-  origin: '*',  // Allow all origins (fine for development)
-  methods: ['GET', 'POST', 'DELETE'],
-  allowedHeaders: ['Content-Type']
-}));
+app.use(
+  cors({
+    origin: "*", // Allow all origins (OK for now)
+    methods: ["GET", "POST", "PUT", "DELETE"],
+    allowedHeaders: ["Content-Type"],
+  })
+);
 
 // Body parser
 app.use(express.json());
@@ -28,11 +31,12 @@ app.use((req, res, next) => {
 // ========================================
 // CONVERSATION MEMORY (OPTIONAL)
 // ========================================
+
 const conversations = new Map();
 
 // Clean up old conversations (1 hour)
 setInterval(() => {
-  const oneHourAgo = Date.now() - (60 * 60 * 1000);
+  const oneHourAgo = Date.now() - 60 * 60 * 1000;
   for (const [sessionId, data] of conversations.entries()) {
     if (data.lastActivity < oneHourAgo) {
       conversations.delete(sessionId);
@@ -51,11 +55,11 @@ app.get("/", (req, res) => {
     status: "🚀 Zeni Backend running",
     timestamp: new Date().toISOString(),
     groqConnected: !!process.env.GROQ_API_KEY,
-    activeConversations: conversations.size
+    activeConversations: conversations.size,
   });
 });
 
-// Chat endpoint
+// Chat endpoint (AI)
 app.post("/chat", async (req, res) => {
   try {
     const { message, sessionId = "default" } = req.body;
@@ -64,33 +68,31 @@ app.post("/chat", async (req, res) => {
       return res.status(400).json({ error: "Message is required" });
     }
 
-    console.log(`💬 Message from ${sessionId}: ${message.substring(0, 50)}...`);
+    console.log(
+      `💬 Message from ${sessionId}: ${message.substring(0, 50)}...`
+    );
 
-    // Get AI response
     const reply = await askGroq(message);
 
-    console.log(`✅ Reply sent (${reply.length} chars)`);
-
-    res.json({ 
+    res.json({
       reply,
       sessionId,
-      timestamp: new Date().toISOString()
+      timestamp: new Date().toISOString(),
     });
-
   } catch (error) {
     console.error("❌ GROQ ERROR:", error.response?.data || error.message);
 
     res.status(500).json({
       error: "AI error",
-      message: error.response?.data?.error?.message || error.message
+      message: error.response?.data?.error?.message || error.message,
     });
   }
 });
 
-// Clear conversation (optional)
+// Clear conversation
 app.delete("/conversation/:sessionId", (req, res) => {
   const { sessionId } = req.params;
-  
+
   if (conversations.has(sessionId)) {
     conversations.delete(sessionId);
     res.json({ message: "Conversation cleared", sessionId });
@@ -100,23 +102,31 @@ app.delete("/conversation/:sessionId", (req, res) => {
 });
 
 // ========================================
+// ✅ CHAT STORAGE ROUTES (IMPORTANT)
+// ========================================
+
+// 👇 THIS IS THE KEY LINE
+app.use("/", chatsRoutes);
+
+// ========================================
 // ERROR HANDLING
 // ========================================
 
-// 404 handler
+// 404 handler (must be LAST)
 app.use((req, res) => {
-  res.status(404).json({ 
+  res.status(404).json({
     error: "Endpoint not found",
-    path: req.path
+    path: req.path,
   });
 });
 
 // Global error handler
 app.use((err, req, res, next) => {
   console.error("Server error:", err);
-  res.status(500).json({ 
+  res.status(500).json({
     error: "Internal server error",
-    message: process.env.NODE_ENV === 'development' ? err.message : undefined
+    message:
+      process.env.NODE_ENV === "development" ? err.message : undefined,
   });
 });
 
@@ -126,26 +136,35 @@ app.use((err, req, res, next) => {
 
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
-  console.log('\n🚀 Zeni AI Backend');
-  console.log('━'.repeat(50));
+  console.log("\n🚀 Zeni AI Backend");
+  console.log("━".repeat(50));
   console.log(`📡 Server: http://localhost:${PORT}`);
-  console.log(`🤖 Groq API: ${process.env.GROQ_API_KEY ? 'Connected ✅' : 'Missing ❌'}`);
-  console.log(`🌐 CORS: Enabled (all origins)`);
-  console.log('━'.repeat(50));
-  console.log('\n📚 Endpoints:');
-  console.log('  GET  /                    - Health check');
-  console.log('  POST /chat                - Send message');
-  console.log('  DEL  /conversation/:id    - Clear conversation');
-  console.log('\n✅ Ready to receive requests!\n');
+  console.log(
+    `🤖 Groq API: ${
+      process.env.GROQ_API_KEY ? "Connected ✅" : "Missing ❌"
+    }`
+  );
+  console.log("🌐 CORS: Enabled");
+  console.log("━".repeat(50));
+  console.log("\n📚 Endpoints:");
+  console.log("  GET    /");
+  console.log("  POST   /chat");
+  console.log("  DELETE /conversation/:id");
+  console.log("  GET    /chats/:userId");
+  console.log("  POST   /chats/:userId");
+  console.log("  PUT    /chats/:userId/active");
+  console.log("  POST   /chats/:userId/:chatId/messages");
+  console.log("  DELETE /chats/:userId/:chatId");
+  console.log("\n✅ Ready to receive requests!\n");
 });
 
 // Graceful shutdown
-process.on('SIGTERM', () => {
-  console.log('SIGTERM received, shutting down gracefully...');
+process.on("SIGTERM", () => {
+  console.log("SIGTERM received, shutting down gracefully...");
   process.exit(0);
 });
 
-process.on('SIGINT', () => {
-  console.log('\nSIGINT received, shutting down gracefully...');
+process.on("SIGINT", () => {
+  console.log("\nSIGINT received, shutting down gracefully...");
   process.exit(0);
 });
