@@ -2,7 +2,10 @@ require("dotenv").config();
 const express = require("express");
 const cors = require("cors");
 const askGroq = require("./groq");
-const chatsRoutes = require("./routes/chats"); // ✅ ADDED
+const chatsRoutes = require("./routes/chats");
+
+// ✅ NEW: STT ROUTE
+const sttRoutes = require("./routes/stt.routes");
 
 const app = express();
 
@@ -13,7 +16,7 @@ const app = express();
 // CORS - Allow React Native to connect
 app.use(
   cors({
-    origin: "*", // Allow all origins (OK for now)
+    origin: "*",
     methods: ["GET", "POST", "PUT", "DELETE"],
     allowedHeaders: ["Content-Type"],
   })
@@ -59,7 +62,10 @@ app.get("/", (req, res) => {
   });
 });
 
-// Chat endpoint (AI)
+// ========================================
+// CHAT (AI)
+// ========================================
+
 app.post("/chat", async (req, res) => {
   try {
     const { message, sessionId = "default" } = req.body;
@@ -67,10 +73,6 @@ app.post("/chat", async (req, res) => {
     if (!message) {
       return res.status(400).json({ error: "Message is required" });
     }
-
-    console.log(
-      `💬 Message from ${sessionId}: ${message.substring(0, 50)}...`
-    );
 
     const reply = await askGroq(message);
 
@@ -80,11 +82,9 @@ app.post("/chat", async (req, res) => {
       timestamp: new Date().toISOString(),
     });
   } catch (error) {
-    console.error("❌ GROQ ERROR:", error.response?.data || error.message);
-
     res.status(500).json({
       error: "AI error",
-      message: error.response?.data?.error?.message || error.message,
+      message: error.message,
     });
   }
 });
@@ -102,17 +102,22 @@ app.delete("/conversation/:sessionId", (req, res) => {
 });
 
 // ========================================
-// ✅ CHAT STORAGE ROUTES (IMPORTANT)
+// ✅ CHAT STORAGE ROUTES
+// ========================================
+app.use("/", chatsRoutes);
+
+// ========================================
+// 🎤 STEP 8: SPEECH TO TEXT ROUTE (NEW)
 // ========================================
 
-// 👇 THIS IS THE KEY LINE
-app.use("/", chatsRoutes);
+// 👉 FINAL URL: POST /api/stt
+app.use("/api/stt", sttRoutes);
 
 // ========================================
 // ERROR HANDLING
 // ========================================
 
-// 404 handler (must be LAST)
+// 404 handler
 app.use((req, res) => {
   res.status(404).json({
     error: "Endpoint not found",
@@ -134,21 +139,17 @@ app.use((err, req, res, next) => {
 // START SERVER
 // ========================================
 
-const PORT = process.env.PORT || 5000;
+const PORT = process.env.PORT;
 app.listen(PORT, () => {
   console.log("\n🚀 Zeni AI Backend");
   console.log("━".repeat(50));
   console.log(`📡 Server: http://localhost:${PORT}`);
-  console.log(
-    `🤖 Groq API: ${
-      process.env.GROQ_API_KEY ? "Connected ✅" : "Missing ❌"
-    }`
-  );
   console.log("🌐 CORS: Enabled");
   console.log("━".repeat(50));
   console.log("\n📚 Endpoints:");
   console.log("  GET    /");
   console.log("  POST   /chat");
+  console.log("  POST   /api/stt  🎤");
   console.log("  DELETE /conversation/:id");
   console.log("  GET    /chats/:userId");
   console.log("  POST   /chats/:userId");
