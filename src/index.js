@@ -3,8 +3,6 @@ const express = require("express");
 const cors = require("cors");
 const askGroq = require("./groq");
 const chatsRoutes = require("./routes/chats");
-
-// ✅ NEW: STT ROUTE
 const sttRoutes = require("./routes/stt.routes");
 
 const app = express();
@@ -82,6 +80,7 @@ app.post("/chat", async (req, res) => {
       timestamp: new Date().toISOString(),
     });
   } catch (error) {
+    console.error("AI Error:", error);
     res.status(500).json({
       error: "AI error",
       message: error.message,
@@ -101,16 +100,28 @@ app.delete("/conversation/:sessionId", (req, res) => {
   }
 });
 
+// Get conversation
+app.get("/conversation/:sessionId", (req, res) => {
+  const { sessionId } = req.params;
+
+  if (conversations.has(sessionId)) {
+    res.json({
+      sessionId,
+      conversation: conversations.get(sessionId),
+    });
+  } else {
+    res.status(404).json({ error: "Conversation not found" });
+  }
+});
+
 // ========================================
-// ✅ CHAT STORAGE ROUTES
+// CHAT STORAGE ROUTES
 // ========================================
 app.use("/", chatsRoutes);
 
 // ========================================
-// 🎤 STEP 8: SPEECH TO TEXT ROUTE (NEW)
+// SPEECH TO TEXT ROUTE
 // ========================================
-
-// 👉 FINAL URL: POST /api/stt
 app.use("/api/stt", sttRoutes);
 
 // ========================================
@@ -119,19 +130,20 @@ app.use("/api/stt", sttRoutes);
 
 // 404 handler
 app.use((req, res) => {
+  console.log(`❌ 404 - Route not found: ${req.method} ${req.path}`);
   res.status(404).json({
     error: "Endpoint not found",
     path: req.path,
+    method: req.method,
   });
 });
 
 // Global error handler
 app.use((err, req, res, next) => {
-  console.error("Server error:", err);
+  console.error("❌ Server error:", err);
   res.status(500).json({
     error: "Internal server error",
-    message:
-      process.env.NODE_ENV === "development" ? err.message : undefined,
+    message: process.env.NODE_ENV === "development" ? err.message : undefined,
   });
 });
 
@@ -139,33 +151,42 @@ app.use((err, req, res, next) => {
 // START SERVER
 // ========================================
 
-const PORT = process.env.PORT;
+const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log("\n🚀 Zeni AI Backend");
   console.log("━".repeat(50));
   console.log(`📡 Server: http://localhost:${PORT}`);
   console.log("🌐 CORS: Enabled");
   console.log("━".repeat(50));
-  console.log("\n📚 Endpoints:");
-  console.log("  GET    /");
-  console.log("  POST   /chat");
-  console.log("  POST   /api/stt  🎤");
-  console.log("  DELETE /conversation/:id");
-  console.log("  GET    /chats/:userId");
-  console.log("  POST   /chats/:userId");
-  console.log("  PUT    /chats/:userId/active");
-  console.log("  POST   /chats/:userId/:chatId/messages");
-  console.log("  DELETE /chats/:userId/:chatId");
+  console.log("\n📚 Available Endpoints:");
+  console.log("\n  🏥 HEALTH:");
+  console.log("    GET    /");
+  console.log("\n  🤖 AI CHAT:");
+  console.log("    POST   /chat");
+  console.log("    GET    /conversation/:sessionId");
+  console.log("    DELETE /conversation/:sessionId");
+  console.log("\n  💾 CHAT STORAGE:");
+  console.log("    GET    /chats/:userId");
+  console.log("    POST   /chats/:userId/chats");
+  console.log("    PUT    /chats/:userId/chats/:chatId");
+  console.log("    PUT    /chats/:userId/active-chat");
+  console.log("    DELETE /chats/:userId/chats/:chatId");
+  console.log("    DELETE /chats/:userId/chats");
+  console.log("    POST   /chats/:userId/chats/:chatId/messages");
+  console.log("\n  🎤 SPEECH TO TEXT:");
+  console.log("    POST   /api/stt");
   console.log("\n✅ Ready to receive requests!\n");
 });
 
 // Graceful shutdown
 process.on("SIGTERM", () => {
-  console.log("SIGTERM received, shutting down gracefully...");
+  console.log("\n⚠️  SIGTERM received, shutting down gracefully...");
   process.exit(0);
 });
 
 process.on("SIGINT", () => {
-  console.log("\nSIGINT received, shutting down gracefully...");
+  console.log("\n⚠️  SIGINT received, shutting down gracefully...");
   process.exit(0);
 });
+
+module.exports = app;

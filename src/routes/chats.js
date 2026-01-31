@@ -22,12 +22,15 @@ router.get("/chats/:userId", (req, res) => {
 });
 
 // ================= CREATE CHAT =================
-router.post("/chats/:userId", (req, res) => {
+router.post("/chats/:userId/chats", (req, res) => {
   const { userId } = req.params;
   const { id, title } = req.body;
 
   if (!id || !title) {
-    return res.status(400).json({ error: "id and title required" });
+    return res.status(400).json({ 
+      success: false,
+      error: "id and title required" 
+    });
   }
 
   if (!userChats[userId]) {
@@ -44,70 +47,138 @@ router.post("/chats/:userId", (req, res) => {
   userChats[userId].chats.push(chat);
   userChats[userId].activeChat = id;
 
-  res.json({ success: true, data: chat });
+  res.json({ 
+    success: true, 
+    data: chat 
+  });
+});
+
+// ================= UPDATE CHAT =================
+router.put("/chats/:userId/chats/:chatId", (req, res) => {
+  const { userId, chatId } = req.params;
+  const { title, messages } = req.body;
+
+  if (!userChats[userId]) {
+    return res.status(404).json({ 
+      success: false,
+      error: "User not found" 
+    });
+  }
+
+  const chat = userChats[userId].chats.find(c => c.id === chatId);
+  if (!chat) {
+    return res.status(404).json({ 
+      success: false,
+      error: "Chat not found" 
+    });
+  }
+
+  if (title !== undefined) chat.title = title;
+  if (messages !== undefined) chat.messages = messages;
+  chat.updatedAt = new Date().toISOString();
+
+  res.json({ 
+    success: true, 
+    data: chat 
+  });
 });
 
 // ================= SET ACTIVE CHAT =================
-router.put("/chats/:userId/active", (req, res) => {
+router.put("/chats/:userId/active-chat", (req, res) => {
   const { userId } = req.params;
   const { chatId } = req.body;
 
   if (!userChats[userId]) {
-    return res.status(404).json({ error: "User not found" });
+    userChats[userId] = { chats: [], activeChat: null };
   }
 
   userChats[userId].activeChat = chatId;
   res.json({ success: true });
 });
 
-// ================= DELETE CHAT =================
-router.delete("/chats/:userId/:chatId", (req, res) => {
+// ================= DELETE SINGLE CHAT =================
+router.delete("/chats/:userId/chats/:chatId", (req, res) => {
   const { userId, chatId } = req.params;
 
   if (!userChats[userId]) {
-    return res.status(404).json({ error: "User not found" });
+    return res.status(404).json({ 
+      success: false,
+      error: "User not found" 
+    });
   }
 
+  const initialLength = userChats[userId].chats.length;
   userChats[userId].chats = userChats[userId].chats.filter(
     (c) => c.id !== chatId
   );
 
+  if (userChats[userId].chats.length === initialLength) {
+    return res.status(404).json({ 
+      success: false,
+      error: "Chat not found" 
+    });
+  }
+
   if (userChats[userId].activeChat === chatId) {
-    userChats[userId].activeChat =
-      userChats[userId].chats[0]?.id || null;
+    userChats[userId].activeChat = userChats[userId].chats[0]?.id || null;
   }
 
   res.json({ success: true });
 });
 
 // ================= CLEAR ALL CHATS =================
-router.delete("/chats/:userId", (req, res) => {
-  userChats[req.params.userId] = {
+router.delete("/chats/:userId/chats", (req, res) => {
+  const { userId } = req.params;
+  
+  userChats[userId] = {
     chats: [],
     activeChat: null,
   };
+  
   res.json({ success: true });
 });
 
 // ================= ADD MESSAGE =================
-router.post("/chats/:userId/:chatId/messages", (req, res) => {
+router.post("/chats/:userId/chats/:chatId/messages", (req, res) => {
   const { userId, chatId } = req.params;
-  const message = req.body;
+  const { message } = req.body;
 
-  const chat = userChats[userId]?.chats.find(
-    (c) => c.id === chatId
-  );
-
-  if (!chat) {
-    return res.status(404).json({ error: "Chat not found" });
+  if (!message) {
+    return res.status(400).json({ 
+      success: false,
+      error: "Message is required" 
+    });
   }
 
-  chat.messages.push({
-    id: `msg_${Date.now()}`,
-    ...message,
-  });
+  if (!userChats[userId]) {
+    return res.status(404).json({ 
+      success: false,
+      error: "User not found" 
+    });
+  }
 
-  res.json({ success: true });
+  const chat = userChats[userId].chats.find((c) => c.id === chatId);
+
+  if (!chat) {
+    return res.status(404).json({ 
+      success: false,
+      error: "Chat not found" 
+    });
+  }
+
+  const newMessage = {
+    id: `msg_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+    ...message,
+    timestamp: message.timestamp || new Date().toISOString(),
+  };
+
+  chat.messages.push(newMessage);
+  chat.updatedAt = new Date().toISOString();
+
+  res.json({ 
+    success: true, 
+    data: newMessage 
+  });
 });
 
 module.exports = router;
