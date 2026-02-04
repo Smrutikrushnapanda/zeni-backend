@@ -4,7 +4,32 @@ const router = express.Router();
 // In-memory store (later replace with DB)
 const userChats = {};
 
-// ================= GET ALL CHATS =================
+/**
+ * @swagger
+ * /chats/{userId}:
+ *   get:
+ *     summary: Get all chats for a user
+ *     tags: [Chat Storage]
+ *     parameters:
+ *       - in: path
+ *         name: userId
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: User ID
+ *     responses:
+ *       200:
+ *         description: User chats retrieved successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 data:
+ *                   $ref: '#/components/schemas/UserChats'
+ */
 router.get("/chats/:userId", (req, res) => {
   const { userId } = req.params;
 
