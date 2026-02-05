@@ -3,23 +3,20 @@ const express = require("express");
 const cors = require("cors");
 const swaggerUi = require("swagger-ui-express");
 const swaggerSpec = require("./swagger");
+const http = require("http");
+const { WebSocketServer } = require("ws");
+const admin = require("firebase-admin");
 
 // Initialize app
 const app = express();
 
-// ========================================
-// IMPORTS & INITIALIZATION
-// ========================================
 const askGroq = require("./groq");
 const chatsRoutes = require("./routes/chats");
 const sttRoutes = require("./routes/stt.routes");
 const adminAuthRoutes = require("./routes/adminAuth.routes");
+const adminNotificationsRoutes = require("./routes/adminNotifications.routes");
+const notificationsRoutes = require("./routes/notifications.routes");
 
-// ========================================
-// MIDDLEWARE
-// ========================================
-
-// CORS - Allow React Native/Web to connect
 app.use(
   cors({
     origin: "*",
@@ -40,11 +37,33 @@ app.use((req, res, next) => {
   next();
 });
 
-// ========================================
-// CONVERSATION MEMORY (OPTIONAL)
-// ========================================
-
 const conversations = new Map();
+
+const parseFirebaseCredentials = () => {
+  const raw = process.env.FIREBASE_ADMIN_KEY;
+  if (!raw) return null;
+
+  try {
+    return JSON.parse(raw);
+  } catch (error) {
+    try {
+      const decoded = Buffer.from(raw, "base64").toString("utf8");
+      return JSON.parse(decoded);
+    } catch (decodeError) {
+      console.error("❌ Failed to parse FIREBASE_ADMIN_KEY");
+      return null;
+    }
+  }
+};
+
+let firebaseReady = false;
+const firebaseCredentials = parseFirebaseCredentials();
+if (firebaseCredentials && !admin.apps.length) {
+  admin.initializeApp({
+    credential: admin.credential.cert(firebaseCredentials),
+  });
+  firebaseReady = true;
+}
 
 // Clean up old conversations (every 15 minutes)
 setInterval(() => {
@@ -57,18 +76,17 @@ setInterval(() => {
   }
 }, 15 * 60 * 1000);
 
-// ========================================
-// ROUTES
-// ========================================
-
-// Health check
 app.get("/", (req, res) => {
   res.json({
     status: "🚀 Zeni Backend running",
     timestamp: new Date().toISOString(),
     groqConnected: !!process.env.GROQ_API_KEY,
     resendConnected: !!process.env.RESEND_API_KEY,
+    firebaseConnected: firebaseReady,
     activeConversations: conversations.size,
+    websocket: {
+      notifications: "/ws/notifications"
+    },
     endpoints: {
       health: "GET /",
       chat: "POST /chat",
@@ -76,6 +94,16 @@ app.get("/", (req, res) => {
       adminAuth: {
         sendOtp: "POST /api/admin/send-otp",
         verifyOtp: "POST /api/admin/verify-otp"
+      },
+      notifications: {
+        sendNotification: "POST /api/admin/send-notification",
+        testPush: "POST /api/admin/test-push",
+        registerDevice: "POST /api/notifications/register-device",
+        list: "GET /api/notifications/:userId",
+        unreadCount: "GET /api/notifications/:userId/unread-count",
+        markRead: "PATCH /api/notifications/:userId/:notificationId/read",
+        markAllRead: "PATCH /api/notifications/:userId/read-all",
+        inAppSocket: "WS /ws/notifications"
       },
       chatStorage: "Use /chats routes",
       stt: "POST /api/stt"
@@ -142,6 +170,18 @@ app.delete("/conversation/:sessionId", (req, res) => {
 // ========================================
 
 app.use("/api/admin", adminAuthRoutes);
+app.use("/api/admin", adminNotificationsRoutes);
+
+// Temporary test route - remove after debugging
+app.get("/api/test", (req, res) => {
+  res.json({ message: "Test route working" });
+});
+
+// ========================================
+// NOTIFICATION ROUTES (public)
+// ========================================
+
+app.use("/", notificationsRoutes);
 
 // ========================================
 // CHAT STORAGE ROUTES
@@ -154,6 +194,37 @@ app.use("/", chatsRoutes);
 // ========================================
 
 app.use("/api/stt", sttRoutes);
+
+// ========================================
+// WEBSOCKET BROADCAST SETUP
+// ========================================
+
+const wsClients = new Map();
+let wsClientId = 0;
+
+const broadcastInAppNotification = (payload, targetUserIds) => {
+  const message = JSON.stringify({
+    type: "notification",
+    payload,
+  });
+
+  for (const [id, client] of wsClients.entries()) {
+    if (client.ws.readyState !== 1) {
+      wsClients.delete(id);
+      continue;
+    }
+
+    if (targetUserIds?.length && !targetUserIds.includes(client.userId)) {
+      continue;
+    }
+
+    client.ws.send(message);
+  }
+};
+
+// Wire up the broadcast helper to the notification routes
+const { setBroadcastHelper } = require("./routes/adminNotifications.routes");
+setBroadcastHelper(broadcastInAppNotification);
 
 // ========================================
 // SWAGGER DOCUMENTATION
@@ -192,6 +263,13 @@ app.use((req, res) => {
       "DELETE /conversation/:sessionId",
       "POST /api/admin/send-otp",
       "POST /api/admin/verify-otp",
+      "POST /api/admin/send-notification",
+      "POST /api/admin/test-push",
+      "POST /api/notifications/register-device",
+      "GET /api/notifications/:userId",
+      "GET /api/notifications/:userId/unread-count",
+      "PATCH /api/notifications/:userId/read-all",
+      "PATCH /api/notifications/:userId/:notificationId/read",
       "POST /api/stt"
     ]
   });
@@ -212,12 +290,66 @@ app.use((err, req, res, next) => {
 
 const PORT = process.env.PORT || 5000;
 
+const server = http.createServer(app);
+const wss = new WebSocketServer({ server, path: "/ws/notifications" });
+
+wss.on("connection", (ws, req) => {
+  const clientId = `${Date.now()}-${++wsClientId}`;
+  let userId = null;
+
+  try {
+    const url = new URL(req.url, `http://${req.headers.host}`);
+    userId = url.searchParams.get("userId");
+  } catch (error) {
+    userId = null;
+  }
+
+  wsClients.set(clientId, { ws, userId });
+
+  console.log(`🔔 In-app client connected (${clientId}) from ${req.socket.remoteAddress}`);
+
+  ws.send(JSON.stringify({
+    type: "welcome",
+    payload: {
+      clientId,
+      userId,
+      message: "Connected to in-app notifications"
+    }
+  }));
+
+  ws.on("message", (data) => {
+    try {
+      const message = JSON.parse(data.toString());
+      if (message.type === "register" && message.userId) {
+        const client = wsClients.get(clientId);
+        if (client) {
+          client.userId = message.userId;
+          wsClients.set(clientId, client);
+        }
+      }
+    } catch (error) {
+      // Ignore invalid messages
+    }
+  });
+
+  ws.on("close", () => {
+    wsClients.delete(clientId);
+    console.log(`🔕 In-app client disconnected (${clientId})`);
+  });
+
+  ws.on("error", (err) => {
+    wsClients.delete(clientId);
+    console.error(`❌ WebSocket error (${clientId}):`, err.message);
+  });
+});
+
 // Only start server if this file is run directly
 if (require.main === module) {
-  app.listen(PORT, () => {
+  server.listen(PORT, () => {
     console.log("\n🚀 Zeni AI Backend");
     console.log("━".repeat(50));
     console.log(`📡 Server: http://localhost:${PORT}`);
+    console.log(`🔔 WebSocket: ws://localhost:${PORT}/ws/notifications`);
     console.log(`🌐 CORS: Enabled`);
     console.log(`🔑 JWT Expiry: ${process.env.JWT_EXPIRES_IN || '24h'}`);
     console.log(`📧 Resend: ${process.env.RESEND_API_KEY ? 'Configured' : 'Not configured'}`);
@@ -232,6 +364,14 @@ if (require.main === module) {
     console.log("\n  🔐 ADMIN AUTH:");
     console.log("    POST   /api/admin/send-otp");
     console.log("    POST   /api/admin/verify-otp");
+    console.log("\n  🔔 NOTIFICATIONS:");
+    console.log("    POST   /api/admin/send-notification");
+    console.log("    POST   /api/admin/test-push");
+    console.log("    POST   /api/notifications/register-device");
+    console.log("    GET    /api/notifications/:userId");
+    console.log("    GET    /api/notifications/:userId/unread-count");
+    console.log("    PATCH  /api/notifications/:userId/read-all");
+    console.log("    PATCH  /api/notifications/:userId/:notificationId/read");
     console.log("\n  💾 CHAT STORAGE:");
     console.log("    GET    /chats/:userId");
     console.log("    POST   /chats/:userId/chats");
@@ -259,4 +399,3 @@ process.on("SIGINT", () => {
 
 // Export for testing
 module.exports = app;
-
