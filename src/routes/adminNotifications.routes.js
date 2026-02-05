@@ -90,7 +90,10 @@ router.post("/send-notification", adminAuth, async (req, res) => {
     const created = addNotificationsForUsers(targetUserIds, notificationData);
     const allUserIds = targetUserIds || getAllUserIds();
 
-    if (!channel || channel === "mobile") {
+    const sendFcm = !channel || channel === "mobile" || channel === "both";
+    const sendInApp = !channel || channel === "in_app" || channel === "both";
+
+    if (sendFcm) {
       console.log("Sending FCM Notification:", {
         title,
         body,
@@ -121,7 +124,7 @@ router.post("/send-notification", adminAuth, async (req, res) => {
       sentAt: timestamp
     };
 
-    if (!channel || channel === "in_app") {
+    if (sendInApp) {
       if (broadcastInAppNotification) {
         broadcastInAppNotification(inAppPayload, allUserIds.length ? allUserIds : null);
       }
@@ -136,8 +139,8 @@ router.post("/send-notification", adminAuth, async (req, res) => {
         targetAudience: targetAudience || "all",
         sentAt: timestamp,
         channels: {
-          fcm: !channel || channel === "mobile",
-          inApp: !channel || channel === "in_app"
+          fcm: sendFcm,
+          inApp: sendInApp
         },
         storedForUsers: created.length
       },
