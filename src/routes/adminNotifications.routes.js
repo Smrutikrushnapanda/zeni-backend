@@ -1,5 +1,6 @@
 const express = require("express");
 const router = express.Router();
+const axios = require("axios");
 const adminAuth = require("../middlewares/adminAuth");
 
 const {
@@ -9,30 +10,42 @@ const {
   getAllUserIds,
 } = require("../stores/notifications.store");
 
-const sendPushNotifications = async ({ tokens, notification, data }) => {
-  const admin = require("firebase-admin");
+const EXPO_PUSH_URL = "https://exp.host/--/api/v2/push/send";
 
+const sendPushNotifications = async ({ tokens, title, body, data }) => {
   if (!tokens.length) {
-    return { success: true, sent: 0 };
+    return { success: true, sent: 0, failed: 0 };
   }
 
+  const messages = tokens.map((token) => ({
+    to: token,
+    sound: "default",
+    title,
+    body,
+    data: data || {},
+  }));
+
   try {
-    const response = await admin.messaging().sendEachForMulticast({
-      tokens,
-      notification: {
-        title: notification.title,
-        body: notification.body,
+    const response = await axios.post(EXPO_PUSH_URL, messages, {
+      headers: {
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+        "Accept-Encoding": "gzip, deflate",
       },
-      data,
     });
 
-    return {
-      success: true,
-      sent: response.successCount || 0,
-      failed: response.failureCount || 0,
-    };
+    const results = response.data?.data || [];
+    const sent = results.filter((r) => r.status === "ok").length;
+    const failed = results.filter((r) => r.status === "error").length;
+
+    if (failed > 0) {
+      const errors = results.filter((r) => r.status === "error");
+      console.log("Push errors:", errors.map((e) => e.message));
+    }
+
+    return { success: true, sent, failed };
   } catch (error) {
-    console.error("FCM Error:", error.message);
+    console.error("Expo Push Error:", error.message);
     return { success: false, reason: error.message, sent: 0 };
   }
 };
@@ -44,17 +57,6 @@ const buildNotificationData = ({ id, title, body, targetAudience, channel, creat
   targetAudience,
   channel,
   createdAt,
-});
-
-const buildFcmDataPayload = (notification) => ({
-  notificationId: notification.id,
-  channel: notification.channel || "mobile",
-  targetAudience: notification.targetAudience || "all",
-});
-
-const buildFcmNotification = (notification) => ({
-  title: notification.title,
-  body: notification.body,
 });
 
 // WS broadcast helper
@@ -107,8 +109,9 @@ router.post("/send-notification", adminAuth, async (req, res) => {
 
       const pushResult = await sendPushNotifications({
         tokens,
-        notification: buildFcmNotification(notificationData),
-        data: buildFcmDataPayload(notificationData),
+        title,
+        body,
+        data: { notificationId: notificationId, channel: normalizedChannel, targetAudience: targetAudience || "all" },
       });
 
       if (!pushResult.success) {
@@ -171,19 +174,11 @@ router.post("/test-push", adminAuth, async (req, res) => {
       tokens = getAllDeviceTokens();
     }
 
-    const testNotification = {
-      id: `test_${Date.now()}`,
-      title: resolvedTitle,
-      body: resolvedBody,
-      channel: "mobile",
-      targetAudience: "test",
-      createdAt: new Date().toISOString(),
-    };
-
     const result = await sendPushNotifications({
       tokens,
-      notification: buildFcmNotification(testNotification),
-      data: buildFcmDataPayload(testNotification),
+      title: resolvedTitle,
+      body: resolvedBody,
+      data: { notificationId: `test_${Date.now()}`, channel: "mobile", targetAudience: "test" },
     });
 
     res.json({
